@@ -1,0 +1,387 @@
+---
+title: "IC2S2 Twitter Analysis"
+author: "Fabio"
+date: "2019-07-21"
+output: github_document
+---
+
+This is a short notebook outlining the code used to scrape tweets related to the IC2S2 conference in Amsterdam.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, error = F, warning = F)
+```
+
+
+## Packages
+
+Load the necessary packages
+
+```{r}
+# install pacman once if not avaible on your machine
+# install.packages("pacman")
+
+pacman::p_load(tidyverse, rtweet, ggraph, igraph, tidygraph)
+```
+
+
+## Get Data
+
+Call Twitter API. If you want to get data yourself you have to register with a free account where you get your personal access point to Twitter. Check out [`rtweet`](https://github.com/mkearney/rtweet/) and follow the instructions. 
+
+```{r, eval = F}
+# twitter_token <- readRDS("twitter_token.rds")
+
+rt <- search_tweets(
+  "#ic2s2 OR #IC2S2", n = 5000, include_rts = T, retryonratelimit = T
+)
+
+save(rt, file = "data/rt.Rdata")
+```
+
+Lets first look at the data structure and column names. Twitter returns over 1,200 unique tweets.
+
+```{r}
+load("data/rt.Rdata")
+
+rt %>% glimpse # the same as str, returns a df overview
+
+```
+
+
+The top ten retweeted tweets.
+
+```{r, results="asis"}
+# load("rt.Rdata")
+rt %>% 
+  filter(!is_retweet) %>% 
+  select(screen_name, text, retweet_count) %>% 
+  filter(!str_detect(text, "^RT")) %>% 
+  mutate(text = str_replace_all(text, "\\\n", " ")) %>% 
+  arrange(desc(retweet_count)) %>% 
+  top_n(n = 10) %>% 
+  knitr::kable(., format = "markdown")
+```
+
+
+## Timeline
+
+What was the best time to tweet?
+
+```{r, fig.height = 6}
+rt %>%
+  ## parse date format
+  mutate(created_at = lubridate::as_datetime(created_at, "Europe/Germany")) %>% 
+  mutate(
+    cdate = created_at %>% 
+      str_extract("\\d{4}-\\d{2}-\\d{2}") %>% 
+      lubridate::ymd(),
+    hour = lubridate::hour(created_at)
+  ) %>% #select(created_at)
+  ## select relevant time period
+  filter(cdate >= as.Date("2019-07-17") & cdate <= as.Date("2019-07-20")) %>% 
+  ## count tweet per and and hour
+  group_by(cdate, hour) %>%
+  tally %>%
+  ungroup %>%
+  ggplot(aes(hour, n)) +
+  geom_line() +
+  ## split the visualization 
+  facet_wrap(~cdate, ncol = 1) +
+  ggthemes::theme_hc() +
+  scale_x_continuous(labels =  seq(5, 24, 3), breaks = seq(5, 24, 3)) +
+  # scale_y_continuous(labels = seq(0, 60, 20), 
+                     # breaks = seq(0, 60, 20), 
+                     # minor_breaks = seq(0, 60, 20)) +
+  ggtitle("Number of Tweets by Hour of the Day mentioning #ic2s2") +
+  xlab("Hour of the Day (15/06/2019)") +
+  ylab("Number of Tweets")
+```
+
+
+## Retweet Network
+
+```{r, fig.width = 15, fig.height=15}
+rt_graph <- rt %>% 
+  ## select relevant variables
+  dplyr::select(screen_name, retweet_screen_name) %>% 
+  ## unnest list of mentions_screen_name
+  unnest %>% 
+  ## count the number of coocurences
+  group_by(screen_name, retweet_screen_name) %>% 
+  tally(sort = T) %>%
+  ungroup %>% 
+  ## drop missing values
+  drop_na %>% 
+  ## filter those coocurences that appear at least 2 times
+  filter(n > 1) %>% 
+  ## transforming the dataframe to a graph object
+  as_tbl_graph() %>% 
+  ## calculating node centrality
+  mutate(centrality = centrality_degree(mode = 'in'))
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "kk") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Retweet Network")
+
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "kk") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## define node labels
+  geom_node_text(aes(label = name), repel = T, fontface = "bold") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Retweet Network") +
+  theme(plot.title = element_text(size = 20, hjust = 0.5))
+
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "circle") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## define node labels
+  geom_node_text(aes(label = name), repel = F, fontface = "bold") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Retweet Network")
+
+```
+
+
+## Mentions Network
+
+```{r, fig.width = 15, fig.height=15}
+rt_graph <- rt %>% 
+  ## remove retweets
+  filter(!is_retweet) %>% 
+  ## select relevant variables
+  dplyr::select(screen_name, mentions_screen_name) %>% 
+  ## unnest list of mentions_screen_name
+  unnest %>% 
+  ## count the number of coocurences
+  group_by(screen_name, mentions_screen_name) %>% 
+  tally(sort = T) %>%
+  ungroup %>% 
+  ## drop missing values
+  drop_na %>% 
+  ## filter those coocurences that appear at least 2 times
+  filter(n > 1) %>% 
+  ## transforming the dataframe to a graph object
+  as_tbl_graph() %>% 
+  ## calculating node centrality
+  mutate(centrality = centrality_degree(mode = 'in'))
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "kk") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Twitter Mentions Network")
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "kk") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## define node labels
+  geom_node_text(aes(label = name), repel = T, fontface = "bold") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Twitter Mentions Network")
+
+rt_graph %>% 
+  ## create graph layout
+  ggraph(layout = "circle") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## define node labels
+  geom_node_text(aes(label = name), repel = F, fontface = "bold") +
+  ## equal width and height
+  coord_fixed() +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Twitter Mentions Network")
+```
+
+### Smaller Mentions Network (n > 2)
+
+```{r, fig.width = 15, fig.height=15}
+rt_graph2 <- rt %>% 
+  ## select relevant variables
+  dplyr::select(screen_name, mentions_screen_name) %>% 
+  ## unnest list of mentions_screen_name
+  unnest %>% 
+  ## count the number of coocurences
+  group_by(screen_name, mentions_screen_name) %>% 
+  tally(sort = T) %>%
+  ungroup %>% 
+  ## drop missing values
+  drop_na %>% 
+  ## filter those coocurences that appear more than 2 times
+  filter(n > 2) %>% 
+  ## transforming the dataframe to a graph object
+  as_tbl_graph() %>% 
+  ## calculating node centrality
+  mutate(centrality = centrality_degree(mode = 'in'))
+
+rt_graph2 %>% 
+  ## create graph layout
+  ggraph(layout = "kk") + 
+  ## define edge aestetics
+  geom_edge_fan(aes(alpha = n, edge_width = n, color = n)) + 
+  ## scale down link saturation
+  scale_edge_alpha(range = c(.5, .9)) +
+  ## define note size param
+  scale_edge_color_gradient(low = "gray50", high = "#1874CD") +
+  geom_node_point(aes(size = centrality), color = "gray30") +
+  ## equal width and height
+  coord_fixed() +
+  geom_node_text(aes(label = name), repel = T, fontface = "bold") +
+  ## plain theme
+  theme_void() +
+  ## title
+  ggtitle("#ic2s2 Twitter Mentions Network")
+
+```
+
+
+## Most Frequent Hashtags
+
+```{r}
+rt_hashtags <- rt %>% 
+  filter(!is_retweet) %>% 
+  select(hashtags) %>% 
+  ## unnest list of hastags
+  unnest %>% 
+    na.omit %>% 
+  ## clean hashtags
+  mutate(hashtags = stringr::str_to_lower(hashtags) %>% 
+           str_replace_all("2018", "18") %>% 
+           ## add #symbol to vector
+           paste0("#", .)) %>% 
+  ## count each hashtag and sort
+  count(hashtags, sort = T) %>% 
+  filter(n > 5)
+
+rt_hashtags %>% 
+  filter(hashtags != "#ic2s2") %>%
+  mutate(hashtags = forcats::fct_reorder(hashtags, n)) %>% 
+  ggplot(aes(hashtags, n)) +
+  geom_bar(stat = "identity", alpha = .7) +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Most Frequent Hastags related to #ic2s2")
+```
+
+## Most Frequent Bigram Network
+
+```{r}
+gg_bigram <- rt %>%
+  ## remove retweets
+  filter(!is_retweet) %>% 
+  select(text) %>% 
+  ## remove text noise
+  mutate(text = stringr::str_remove_all(text, "w |amp ")) %>% 
+  ## remove retweets
+  filter(!stringr::str_detect(text, "^RT")) %>% 
+  ## remove urls
+  mutate(text = stringr::str_remove_all(text, "https?[:]//[[:graph:]]+")) %>% 
+  mutate(id = 1:n()) %>% 
+  ## split text into words
+  tidytext::unnest_tokens(word, text, token = "words") %>% 
+  ## remove stop words
+  anti_join(tidytext::stop_words) %>% 
+  ## paste words to text by id
+  group_by(id) %>% 
+  summarise(text = paste(word, collapse = " ")) %>% 
+  ungroup %>% 
+  ## again split text into bigrams (word occurences or collocations)
+  tidytext::unnest_tokens(bigram, text, token = "ngrams", n = 2) %>% 
+  separate(bigram, c("word1", "word2"), sep = " ") %>% 
+  ## remove the hashtag and count bigrams 
+  filter(word1 != "ic2s2", word2 != "ic2s2") %>%
+  count(word1, word2, sort = T) %>% 
+  ## select first 50
+  slice(1:50) %>% 
+  drop_na() %>%
+  ## create tidy graph object
+  as_tbl_graph() %>% 
+  ## calculate node centrality
+  mutate(centrality = centrality_degree(mode = 'in'))
+```
+
+
+```{r}
+gg_bigram %>% 
+  ggraph() +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n)) +
+  geom_node_point(aes(size = centrality)) + 
+  geom_node_text(aes(label = name),  repel = TRUE) +
+  theme_void() +
+  scale_edge_alpha("", range = c(0.3, .6)) +
+  ggtitle("Top Bigram Network from Tweets using hashtag #ic2s2")
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
