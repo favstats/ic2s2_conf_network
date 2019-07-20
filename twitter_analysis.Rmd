@@ -93,7 +93,7 @@ rt %>%
                      # breaks = seq(0, 60, 20), 
                      # minor_breaks = seq(0, 60, 20)) +
   ggtitle("Number of Tweets by Hour of the Day mentioning #ic2s2") +
-  xlab("Hour of the Day (15/06/2019)") +
+  xlab("Hour of the Day") +
   ylab("Number of Tweets")
 ```
 
